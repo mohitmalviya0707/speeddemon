@@ -57,7 +57,7 @@ size_t intern(std::atomic<uint64_t>* keys, std::atomic<uint64_t>* spans, size_t 
             if (expected == key) return s;
             continue;
         }
-        s = (s + 1) % SLOTS;
+        s = (s + 1) & (SLOTS - 1);
     }
 }
 
