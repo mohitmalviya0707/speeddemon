@@ -70,6 +70,7 @@ impl Table {
         if self.slots[s].0 == 0 {
             (self.slots[s], self.len) = ((key, self.len, u32::MAX), self.len + 1);
         }
+
         self.slots[s].1
     }
     /// The same map in a table about two thirds full at most, the smallest a lookup stays short in.
@@ -135,6 +136,45 @@ fn pair(a: u32, b: u32) -> u64 {
 fn tokens(text: &[u8]) -> impl Iterator<Item = &[u8]> {
     text.split(|c| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty())
 }
+
+/// Builds the KMP prefix table for case-insensitive phrase matching.
+fn phrase_prefix(phrase: &[&[u8]]) -> Vec<usize> {
+    let mut prefix = vec![0; phrase.len()];
+    let mut matched = 0;
+
+    for i in 1..phrase.len() {
+        while matched > 0 && !phrase[i].eq_ignore_ascii_case(phrase[matched]) {
+            matched = prefix[matched - 1];
+        }
+        if phrase[i].eq_ignore_ascii_case(phrase[matched]) {
+            matched += 1;
+        }
+        prefix[i] = matched;
+    }
+    prefix
+}
+
+/// Searches document tokens without allocating a token vector.
+fn contains_phrase(text: &[u8], phrase: &[&[u8]], prefix: &[usize]) -> bool {
+    if phrase.is_empty() {
+        return false;
+    }
+
+    let mut matched = 0;
+    for word in tokens(text) {
+        while matched > 0 && !word.eq_ignore_ascii_case(phrase[matched]) {
+            matched = prefix[matched - 1];
+        }
+        if word.eq_ignore_ascii_case(phrase[matched]) {
+            matched += 1;
+            if matched == phrase.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 
 /// k + 1 cut points splitting b into k parts, each starting at a document whose id is a
 /// multiple of 64, so no two parts ever touch the same bitset word.
@@ -444,12 +484,16 @@ fn main() {
                             // Every adjacent pair occurs; check the words occur together, in order.
                             phrase.clear();
                             phrase.extend(q[at as usize..stop as usize].split(|&c| c == b' '));
+                            let prefix = phrase_prefix(&phrase);
                             v.retain(|&d| {
                                 let d = d0 + d as usize;
                                 let line = if d == 0 { 0 } else { end[d - 1].load(Relaxed) as usize + 1 };
                                 let tab = line + docs[line..].iter().position(|&c| c == b'\t').unwrap();
-                                let toks: Vec<&[u8]> = tokens(&docs[tab + 1..end[d].load(Relaxed) as usize]).collect();
-                                toks.windows(phrase.len()).any(|w| w.iter().zip(&phrase).all(|(a, b)| a.eq_ignore_ascii_case(b)))
+                                contains_phrase(
+                                    &docs[tab + 1..end[d].load(Relaxed) as usize],
+                                    &phrase,
+                                    &prefix,
+                                )
                             });
                         }
                         let have = (*count).min(10) as usize;
